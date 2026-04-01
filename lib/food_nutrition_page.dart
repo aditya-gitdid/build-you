@@ -1,16 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:http/http.dart' as http;
-
-// ─── Change this to your backend URL ──────────────────────────────────────────
-// Local development:  'http://10.0.2.2:3000' (Android emulator)
-//                     'http://localhost:3000'  (iOS simulator)
-// Production:         'https://your-deployed-backend.com'
-const String kBackendUrl = 'http://192.168.x.x:3000';
-// ─────────────────────────────────────────────────────────────────────────────
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 class FoodNutritionPage extends StatefulWidget {
   const FoodNutritionPage({super.key});
@@ -20,62 +18,213 @@ class FoodNutritionPage extends StatefulWidget {
 }
 
 class _FoodNutritionPageState extends State<FoodNutritionPage> {
+  // ── API ───────────────────────────────────────────────────────────────────
+  static const String _apiKey =
+      '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';
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final List<Map<String, dynamic>> _messages = [];
+
+  File? _imageFile;
+  Uint8List? _webImage;
+
   final ImagePicker _picker = ImagePicker();
-
-  XFile? _imageFile;
   bool _isLoading = false;
-  String _loadingText = 'Analyzing food...';
-  _NutritionResult? _result;
-  String? _errorMsg;
 
-  // ── Image picking ──────────────────────────────────────────────────────────
+  late stt.SpeechToText _speech;
+  bool _isListening = false;
 
-  Future<void> _pickImage(ImageSource source) async {
-    try {
-      final picked = await _picker.pickImage(source: source, imageQuality: 85);
-      if (picked == null) return;
-      setState(() {
-        _imageFile = picked;
-        _result = null;
-        _errorMsg = null;
-      });
-    } catch (e) {
-      _showError('Could not pick image: $e');
+  String _selectedLanguage = 'English';
+  final List<String> _languages = ['English', 'Hindi', 'Marathi'];
+
+  @override
+  void initState() {
+    super.initState();
+    _speech = stt.SpeechToText();
+    // Welcome message
+    _messages.add({
+      'text': '👋 Hi! I\'m your **Fitness AI Coach**.\n\nAsk me anything about food, nutrition, calories, diet plans, or upload a food photo for instant analysis! 🥗',
+      'isUser': false,
+      'englishText': null,
+      'selectedLanguage': 'English',
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scrollController.dispose();
+    _speech.stop();
+    super.dispose();
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  String _speechLocale(String lang) {
+    switch (lang) {
+      case 'Hindi': return 'hi_IN';
+      case 'Marathi': return 'mr_IN';
+      default: return 'en_IN';
     }
   }
 
-  void _showImageSourceSheet() {
+  String _formatText(String text) {
+    for (final h in [
+      '## Food Name', '## Estimated Calories', '## Protein',
+      '## Carbohydrates', '## Fats', '## Fiber', '## Vitamins',
+      '## Minerals', '## Health Benefits', '## Who Should Eat This',
+      '## Who Should Avoid or Limit This', '## Best Time to Eat',
+      '## Fitness / Diet Advice',
+    ]) {
+      text = text.replaceAll(h, '\n\n$h');
+    }
+    return text.trim();
+  }
+
+  String _cleanResponse(String text) {
+    text = text.replaceAll(RegExp(r'^Okay,.*?\n', multiLine: false), '');
+    text = text.replaceAll(RegExp(r'^Sure,.*?\n', multiLine: false), '');
+    text = text.replaceAll(RegExp(r"^Let's.*?\n", multiLine: false), '');
+    text = text.replaceAll(RegExp(r"^Here'?s.*?\n", multiLine: false), '');
+    return text.trim();
+  }
+
+  void _scrollToBottom() {
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  // ── API calls ─────────────────────────────────────────────────────────────
+
+  Future<String> _callApi(List<Map<String, dynamic>> content,
+      {double temperature = 0.3}) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('https://openrouter.ai/api/v1/chat/completions'),
+            headers: {
+              'Authorization': 'Bearer $_apiKey',
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://yourapp.com',
+              'X-Title': 'Fitness AI Coach',
+            },
+            body: jsonEncode({
+              'model': 'openrouter/auto',
+              'messages': [
+                {'role': 'user', 'content': content}
+              ],
+              'temperature': temperature,
+              'max_tokens': 1000,
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        final msg = data['choices']?[0]?['message'];
+        String? text = msg?['content'];
+        if (text == null || text.trim().isEmpty) text = msg?['reasoning'];
+        if ((text == null || text.trim().isEmpty) &&
+            msg?['reasoning_details'] is List) {
+          text = (msg['reasoning_details'] as List)
+              .map((e) => e['text']?.toString() ?? '')
+              .join('\n');
+        }
+        if (text != null && text.trim().isNotEmpty) {
+          return _cleanResponse(_formatText(text));
+        }
+        return 'No response from AI.';
+      } else if (response.statusCode == 429) {
+        return 'AI is busy right now. Please try again in a few seconds.';
+      } else {
+        return 'API Error: ${data['error']?['message'] ?? 'Unknown error'}';
+      }
+    } catch (e) {
+      return 'Something went wrong. Please check your internet and try again.';
+    }
+  }
+
+  Future<String> _translate(String text, String lang) async {
+    if (lang == 'English') return text;
+    final prompt = '''
+You are a professional translator for food, nutrition, and fitness content.
+Translate the following English text into proper $lang.
+Keep all numbers, units (kcal, g, mg), and food names unchanged.
+Keep the exact same structure and formatting.
+Return ONLY the translated final answer.
+
+English Text:
+$text
+''';
+    return _callApi([
+      {'type': 'text', 'text': prompt}
+    ], temperature: 0.2);
+  }
+
+  // ── Image picking ─────────────────────────────────────────────────────────
+
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picked = await _picker.pickImage(
+          source: source, imageQuality: 80, maxWidth: 800, maxHeight: 800);
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      setState(() {
+        _webImage = bytes;
+        _imageFile = kIsWeb ? null : File(picked.path);
+      });
+      await _analyzeImage();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load image: $e')),
+        );
+      }
+    }
+  }
+
+  void _showImageSheet() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A2A44),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 8),
             Container(
-              width: 36,
-              height: 4,
+              width: 36, height: 4,
               decoration: BoxDecoration(
-                color: const Color(0xFF3A4C68),
-                borderRadius: BorderRadius.circular(2),
-              ),
+                  color: const Color(0xFF3A4C68),
+                  borderRadius: BorderRadius.circular(2)),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             ListTile(
-              leading: const Icon(Icons.camera_alt_outlined, color: Color(0xFFFF6200)),
-              title: const Text('Take a photo', style: TextStyle(color: Colors.white)),
+              leading: const Icon(Icons.camera_alt_outlined,
+                  color: Color(0xFFFF6200)),
+              title: const Text('Take a photo',
+                  style: TextStyle(color: Colors.white)),
               onTap: () {
                 Navigator.pop(context);
                 _pickImage(ImageSource.camera);
               },
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library_outlined, color: Color(0xFFFF6200)),
-              title: const Text('Choose from gallery', style: TextStyle(color: Colors.white)),
+              leading: const Icon(Icons.photo_library_outlined,
+                  color: Color(0xFFFF6200)),
+              title: const Text('Choose from gallery',
+                  style: TextStyle(color: Colors.white)),
               onTap: () {
                 Navigator.pop(context);
                 _pickImage(ImageSource.gallery);
@@ -88,71 +237,203 @@ class _FoodNutritionPageState extends State<FoodNutritionPage> {
     );
   }
 
-  // ── Analysis ──────────────────────────────────────────────────────────────
+  // ── Send / Analyze ────────────────────────────────────────────────────────
 
-  Future<void> _analyzeFood() async {
-    if (_imageFile == null) return;
+  Future<void> _analyzeImage() async {
+    if (_webImage == null) return;
+    final imageBytes = _webImage!;
+    final imgFile = _imageFile;
+    final imgWeb = _webImage;
 
     setState(() {
+      _messages.add({
+        'isUser': true,
+        'imageFile': imgFile,
+        'webImage': imgWeb,
+        'text': '',
+      });
       _isLoading = true;
-      _loadingText = 'Detecting food items...';
-      _errorMsg = null;
-      _result = null;
+      _imageFile = null;
+      _webImage = null;
     });
+    _scrollToBottom();
 
-    try {
-      final bytes = await File(_imageFile!.path).readAsBytes();
-      final base64Image = base64Encode(bytes);
-      final mimeType = _imageFile!.mimeType ?? 'image/jpeg';
+    final base64Image = base64Encode(imageBytes);
+    final prompt = '''
+You are an expert fitness nutrition coach and food analyst.
+Analyze the uploaded food image carefully and provide the answer in this format:
 
-      setState(() => _loadingText = 'Calculating nutrition...');
+## Food Name
+[answer]
 
-      final response = await http
-          .post(
-            Uri.parse('$kBackendUrl/analyze-food'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'imageBase64': base64Image,
-              'mimeType': mimeType,
-            }),
-          )
-          .timeout(const Duration(seconds: 45));
+## Estimated Calories
+[answer]
 
-      if (response.statusCode != 200) {
-        throw Exception('Server error: ${response.statusCode}');
-      }
+## Protein
+[answer]
 
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
+## Carbohydrates
+[answer]
 
-      if (json['success'] != true) {
-        throw Exception(json['error'] ?? 'Analysis failed');
-      }
+## Fats
+[answer]
 
+## Fiber
+[answer]
+
+## Health Benefits
+[answer]
+
+## Fitness / Diet Advice
+[answer]
+
+Keep it clean, structured, and easy to read.
+Reply only in English.
+''';
+
+    final content = [
+      {'type': 'text', 'text': prompt},
+      {
+        'type': 'image_url',
+        'image_url': {'url': 'data:image/jpeg;base64,$base64Image'},
+      },
+    ];
+
+    final englishResponse = await _callApi(content);
+    String finalResponse = englishResponse;
+    if (_selectedLanguage != 'English') {
+      finalResponse = await _translate(englishResponse, _selectedLanguage);
+    }
+
+    if (mounted) {
       setState(() {
-        _result = _NutritionResult.fromJson(json['data'] as Map<String, dynamic>);
+        _messages.add({
+          'text': finalResponse,
+          'englishText': englishResponse,
+          'isUser': false,
+          'selectedLanguage': _selectedLanguage,
+        });
         _isLoading = false;
       });
-    } catch (e) {
+      _scrollToBottom();
+    }
+  }
+
+  Future<void> _sendMessage() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+
+    if (_isListening) {
+      await _speech.stop();
+      setState(() => _isListening = false);
+    }
+
+    _controller.clear();
+    FocusScope.of(context).unfocus();
+
+    setState(() {
+      _messages.add({'text': text, 'isUser': true});
+      _isLoading = true;
+    });
+    _scrollToBottom();
+
+    final prompt = '''
+You are an expert fitness nutrition coach.
+Answer the user's question in a simple, friendly, and useful way.
+You can help with diet plans, calories, protein, carbs, fats, vitamins, minerals,
+weight loss, weight gain, muscle gain, healthy eating, workout nutrition, meal timing.
+Keep the answer practical and easy to understand.
+Reply only in English.
+
+User question: $text
+''';
+
+    final englishResponse =
+        await _callApi([{'type': 'text', 'text': prompt}]);
+    String finalResponse = englishResponse;
+    if (_selectedLanguage != 'English') {
+      finalResponse = await _translate(englishResponse, _selectedLanguage);
+    }
+
+    if (mounted) {
       setState(() {
+        _messages.add({
+          'text': finalResponse,
+          'englishText': englishResponse,
+          'isUser': false,
+          'selectedLanguage': _selectedLanguage,
+        });
         _isLoading = false;
-        _errorMsg = e.toString().replaceFirst('Exception: ', '');
+      });
+      _scrollToBottom();
+    }
+  }
+
+  Future<void> _translateMessage(int index, String newLang) async {
+    final englishText = _messages[index]['englishText'];
+    if (englishText == null || englishText.toString().trim().isEmpty) return;
+
+    setState(() {
+      _messages[index]['text'] = 'Translating...';
+      _messages[index]['selectedLanguage'] = newLang;
+    });
+
+    final translated = await _translate(englishText.toString(), newLang);
+
+    if (mounted) {
+      setState(() {
+        _messages[index]['text'] = translated;
+        _messages[index]['selectedLanguage'] = newLang;
       });
     }
   }
 
-  void _showError(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
-    );
-  }
+  Future<void> _toggleListening() async {
+    if (!_isListening) {
+      final status = await Permission.microphone.request();
+      if (!status.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Microphone permission denied')),
+          );
+        }
+        return;
+      }
 
-  void _reset() {
-    setState(() {
-      _imageFile = null;
-      _result = null;
-      _errorMsg = null;
-      _isLoading = false;
-    });
+      final available = await _speech.initialize(
+        onStatus: (s) {
+          if (s == 'done' || s == 'notListening') {
+            setState(() => _isListening = false);
+          }
+        },
+        onError: (e) {
+          setState(() => _isListening = false);
+        },
+      );
+
+      if (available) {
+        setState(() => _isListening = true);
+        await _speech.listen(
+          localeId: _speechLocale(_selectedLanguage),
+          partialResults: true,
+          listenFor: const Duration(seconds: 30),
+          pauseFor: const Duration(seconds: 5),
+          listenMode: stt.ListenMode.dictation,
+          onResult: (result) {
+            setState(() {
+              _controller.value = TextEditingValue(
+                text: result.recognizedWords,
+                selection: TextSelection.collapsed(
+                    offset: result.recognizedWords.length),
+              );
+            });
+          },
+        );
+      }
+    } else {
+      await _speech.stop();
+      setState(() => _isListening = false);
+    }
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -160,384 +441,127 @@ class _FoodNutritionPageState extends State<FoodNutritionPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0B1120),
+      backgroundColor: const Color(0xFF0B0715),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0F1A2E),
+        backgroundColor: const Color(0xFF0B0715),
         elevation: 0,
-        title: const Text(
-          'Food Nutrition Analyzer',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-        ),
-        leading: _result != null || _imageFile != null
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                onPressed: _reset,
-              )
-            : null,
-      ),
-      body: SafeArea(
-        child: _isLoading
-            ? _buildLoading()
-            : _result != null
-                ? _buildResult()
-                : _imageFile != null
-                    ? _buildPreview()
-                    : _buildUpload(),
-      ),
-    );
-  }
-
-  // ── Upload screen ─────────────────────────────────────────────────────────
-
-  Widget _buildUpload() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A2A44),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: const Color(0xFF314461)),
-              ),
-              child: const Icon(Icons.camera_enhance_outlined,
-                  color: Color(0xFFFF6200), size: 48),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Analyze any food photo',
-              style: TextStyle(
-                  color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Upload a photo of your meal and get instant nutritional breakdown — calories, protein, carbs, fiber, and more.',
-              style: TextStyle(color: Color(0xFF9CB0CB), fontSize: 15, height: 1.5),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 36),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _showImageSourceSheet,
-                icon: const Icon(Icons.add_photo_alternate_outlined),
-                label: const Text('Upload food photo'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF6200),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'Supports any food from any cuisine or language',
-              style: TextStyle(color: Color(0xFF6B7A94), fontSize: 13),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── Preview screen ────────────────────────────────────────────────────────
-
-  Widget _buildPreview() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Image.file(
-              File(_imageFile!.path),
-              width: double.infinity,
-              height: 280,
-              fit: BoxFit.cover,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (_errorMsg != null)
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A0F0F),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.redAccent.withOpacity(0.4)),
-              ),
-              child: Text(
-                _errorMsg!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 13),
-              ),
-            ),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _analyzeFood,
-              icon: const Icon(Icons.auto_awesome_outlined),
-              label: const Text('Analyze nutrition'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF6200),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle:
-                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: _showImageSourceSheet,
-              icon: const Icon(Icons.swap_horiz, color: Color(0xFFFF6200)),
-              label: const Text('Use different photo',
-                  style: TextStyle(color: Color(0xFFFF6200))),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Color(0xFF314461)),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Loading screen ────────────────────────────────────────────────────────
-
-  Widget _buildLoading() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const SizedBox(
-            width: 52,
-            height: 52,
-            child: CircularProgressIndicator(
-              color: Color(0xFFFF6200),
-              strokeWidth: 3,
-            ),
-          ),
-          const SizedBox(height: 20),
-          Text(
-            _loadingText,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'AI is scanning your meal...',
-            style: TextStyle(color: Color(0xFF6B7A94), fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Result screen ─────────────────────────────────────────────────────────
-
-  Widget _buildResult() {
-    final r = _result!;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Thumbnail
-          ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Image.file(
-              File(_imageFile!.path),
-              width: double.infinity,
-              height: 180,
-              fit: BoxFit.cover,
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Detected items
-          const Text('Detected items',
-              style: TextStyle(
-                  color: Color(0xFF9CB0CB),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.8)),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: r.items
-                .map((item) => Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1A2A44),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFF314461)),
-                      ),
-                      child: Text(item,
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 13)),
+        title: const Text('🥗 Food & Nutrition AI',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.language, color: Colors.white),
+            color: const Color(0xFF1A2A44),
+            onSelected: (val) {
+              setState(() => _selectedLanguage = val);
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Language set to $val')));
+            },
+            itemBuilder: (_) => _languages
+                .map((l) => PopupMenuItem(
+                      value: l,
+                      child: Text(l,
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: l == _selectedLanguage
+                                  ? FontWeight.bold
+                                  : FontWeight.normal)),
                     ))
                 .toList(),
           ),
-          const SizedBox(height: 16),
-
-          // Calories card
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A2A44),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Total calories',
-                          style: TextStyle(
-                              color: Color(0xFF9CB0CB), fontSize: 13)),
-                      Text(
-                        '${r.calories}',
-                        style: const TextStyle(
-                            color: Color(0xFFFF6200),
-                            fontSize: 40,
-                            fontWeight: FontWeight.w700),
-                      ),
-                      const Text('kcal',
-                          style:
-                              TextStyle(color: Color(0xFF6B7A94), fontSize: 13)),
-                    ],
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    const Text('Meal size',
-                        style:
-                            TextStyle(color: Color(0xFF9CB0CB), fontSize: 13)),
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F2A1A),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFF2E7D32)),
-                      ),
-                      child: Text(
-                        r.mealSize,
-                        style: const TextStyle(
-                            color: Color(0xFF4CAF50),
-                            fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+        ],
+      ),
+      body: Column(
+        children: [
+          // Messages list
+          Expanded(
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.only(top: 10, bottom: 10),
+              itemCount: _messages.length,
+              itemBuilder: (context, index) {
+                return _ChatBubble(
+                  message: _messages[index],
+                  languages: _languages,
+                  onLanguageChanged: (lang) => _translateMessage(index, lang),
+                );
+              },
             ),
           ),
-          const SizedBox(height: 10),
 
-          // Macros row
-          Row(
-            children: [
-              Expanded(child: _MacroCard(label: 'Protein', value: r.protein, unit: 'g', color: const Color(0xFF378ADD))),
-              const SizedBox(width: 8),
-              Expanded(child: _MacroCard(label: 'Carbs', value: r.carbs, unit: 'g', color: const Color(0xFFFF6200))),
-              const SizedBox(width: 8),
-              Expanded(child: _MacroCard(label: 'Fat', value: r.fat, unit: 'g', color: const Color(0xFFF5C433))),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          // Detailed breakdown
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A2A44),
-              borderRadius: BorderRadius.circular(14),
+          // Loading indicator
+          if (_isLoading)
+            const Padding(
+              padding: EdgeInsets.all(8),
+              child: Column(children: [
+                CircularProgressIndicator(color: Color(0xFFFF6200)),
+                SizedBox(height: 6),
+                Text('Analyzing / Thinking...',
+                    style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ]),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Detailed breakdown',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 14),
-                _BarRow(label: 'Fiber', value: r.fiber, maxValue: 30, color: const Color(0xFF639922)),
-                _BarRow(label: 'Sugars', value: r.sugars, maxValue: 50, color: const Color(0xFFE24B4A)),
-                _BarRow(label: 'Saturated fat', value: r.saturatedFat, maxValue: 20, color: const Color(0xFFBA7517)),
-                _BarRow(label: 'Sodium', value: r.sodium, maxValue: 2300, color: const Color(0xFF7F77DD)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
 
-          // Advice box
-          if (r.advice.isNotEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0F1E35),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF1D4E8A)),
-              ),
+          // Input bar
+          SafeArea(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              color: const Color(0xFF0F1A2E),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.tips_and_updates_outlined,
-                      color: Color(0xFF378ADD), size: 20),
-                  const SizedBox(width: 10),
+                  IconButton(
+                    icon: const Icon(Icons.camera_alt_outlined,
+                        color: Color(0xFFFF6200)),
+                    onPressed: _isLoading
+                        ? null
+                        : () => _pickImage(ImageSource.camera),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.photo_library_outlined,
+                        color: Color(0xFFFF6200)),
+                    onPressed: _isLoading ? null : _showImageSheet,
+                  ),
                   Expanded(
-                    child: Text(
-                      r.advice,
-                      style: const TextStyle(
-                          color: Color(0xFFB2C1D7), fontSize: 14, height: 1.5),
+                    child: TextField(
+                      controller: _controller,
+                      enabled: !_isLoading,
+                      style: const TextStyle(color: Colors.white),
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      minLines: 1,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: _isListening
+                            ? 'Listening...'
+                            : 'Ask about food or nutrition...',
+                        hintStyle:
+                            const TextStyle(color: Color(0xFF8FA0BA)),
+                        filled: true,
+                        fillColor: const Color(0xFF1A2A44),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 12),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                      onSubmitted: (_) => _sendMessage(),
                     ),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      _isListening ? Icons.mic : Icons.mic_none,
+                      color: _isListening
+                          ? Colors.red
+                          : const Color(0xFFFF6200),
+                    ),
+                    onPressed: _isLoading ? null : _toggleListening,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.send, color: Color(0xFFFF6200)),
+                    onPressed: _isLoading ? null : _sendMessage,
                   ),
                 ],
               ),
             ),
-          const SizedBox(height: 16),
-
-          // Analyze another
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _reset,
-              icon: const Icon(Icons.add_photo_alternate_outlined),
-              label: const Text('Analyze another photo'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1A2A44),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle: const TextStyle(fontSize: 15),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-            ),
           ),
         ],
       ),
@@ -545,142 +569,126 @@ class _FoodNutritionPageState extends State<FoodNutritionPage> {
   }
 }
 
-// ── Supporting widgets ────────────────────────────────────────────────────────
+// ── Chat Bubble ───────────────────────────────────────────────────────────────
 
-class _MacroCard extends StatelessWidget {
-  const _MacroCard({
-    required this.label,
-    required this.value,
-    required this.unit,
-    required this.color,
+class _ChatBubble extends StatelessWidget {
+  const _ChatBubble({
+    required this.message,
+    required this.languages,
+    required this.onLanguageChanged,
   });
 
-  final String label;
-  final int value;
-  final String unit;
-  final Color color;
+  final Map<String, dynamic> message;
+  final List<String> languages;
+  final void Function(String) onLanguageChanged;
 
   @override
   Widget build(BuildContext context) {
+    final bool isUser = message['isUser'] ?? false;
+    final File? imageFile = message['imageFile'];
+    final Uint8List? webImage = message['webImage'];
+    final String selectedLang = message['selectedLanguage'] ?? 'English';
+    final bool canTranslate = !isUser &&
+        message['englishText'] != null &&
+        message['englishText'].toString().trim().isNotEmpty;
+
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A2A44),
-        borderRadius: BorderRadius.circular(12),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Column(
+        crossAxisAlignment:
+            isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          Text(
-            '$value$unit',
-            style: TextStyle(
-                color: color, fontSize: 22, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          Text(label,
-              style:
-                  const TextStyle(color: Color(0xFF9CB0CB), fontSize: 13)),
-        ],
-      ),
-    );
-  }
-}
-
-class _BarRow extends StatelessWidget {
-  const _BarRow({
-    required this.label,
-    required this.value,
-    required this.maxValue,
-    required this.color,
-  });
-
-  final String label;
-  final int value;
-  final int maxValue;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final pct = (value / maxValue).clamp(0.0, 1.0);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(label,
-                    style: const TextStyle(
-                        color: Color(0xFF9CB0CB), fontSize: 13)),
+          // Image preview
+          if (imageFile != null || webImage != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: kIsWeb
+                    ? Image.memory(webImage!,
+                        height: 180, width: 220, fit: BoxFit.cover)
+                    : Image.file(imageFile!,
+                        height: 180, width: 220, fit: BoxFit.cover),
               ),
-              Text(
-                label == 'Sodium' ? '${value}mg' : '${value}g',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: pct,
-              minHeight: 7,
-              backgroundColor: const Color(0xFF2A3A54),
-              valueColor: AlwaysStoppedAnimation<Color>(color),
             ),
-          ),
+
+          // Text bubble
+          if ((message['text'] ?? '').toString().isNotEmpty)
+            Container(
+              constraints: BoxConstraints(
+                  maxWidth: MediaQuery.of(context).size.width * 0.78),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: isUser
+                    ? const Color(0xFF1B5E20)
+                    : const Color(0xFF1A2A44),
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(18),
+                  topRight: const Radius.circular(18),
+                  bottomLeft: Radius.circular(isUser ? 18 : 4),
+                  bottomRight: Radius.circular(isUser ? 4 : 18),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (canTranslate)
+                    Align(
+                      alignment: Alignment.topRight,
+                      child: PopupMenuButton<String>(
+                        tooltip: 'Change language',
+                        color: const Color(0xFF2A2A2A),
+                        icon: const Icon(Icons.language,
+                            color: Colors.white70, size: 18),
+                        onSelected: onLanguageChanged,
+                        itemBuilder: (_) => languages
+                            .map((l) => PopupMenuItem(
+                                  value: l,
+                                  child: Text(l,
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: l == selectedLang
+                                              ? FontWeight.bold
+                                              : FontWeight.normal)),
+                                ))
+                            .toList(),
+                      ),
+                    ),
+                  if (isUser)
+                    Text(
+                      message['text'] ?? '',
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 15, height: 1.5),
+                    )
+                  else
+                    MarkdownBody(
+                      data: message['text'] ?? '',
+                      selectable: true,
+                      styleSheet: MarkdownStyleSheet(
+                        p: const TextStyle(
+                            color: Colors.white, fontSize: 15, height: 1.6),
+                        strong: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold),
+                        h2: const TextStyle(
+                            color: Color(0xFFFF8B2D),
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold),
+                        h3: const TextStyle(
+                            color: Color(0xFFFF8B2D),
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold),
+                        listBullet:
+                            const TextStyle(color: Colors.white, fontSize: 15),
+                      ),
+                    ),
+                ],
+              ),
+            ),
         ],
       ),
-    );
-  }
-}
-
-// ── Data model ────────────────────────────────────────────────────────────────
-
-class _NutritionResult {
-  const _NutritionResult({
-    required this.items,
-    required this.mealSize,
-    required this.calories,
-    required this.protein,
-    required this.carbs,
-    required this.fat,
-    required this.fiber,
-    required this.sugars,
-    required this.saturatedFat,
-    required this.sodium,
-    required this.advice,
-  });
-
-  final List<String> items;
-  final String mealSize;
-  final int calories;
-  final int protein;
-  final int carbs;
-  final int fat;
-  final int fiber;
-  final int sugars;
-  final int saturatedFat;
-  final int sodium;
-  final String advice;
-
-  factory _NutritionResult.fromJson(Map<String, dynamic> j) {
-    int _i(dynamic v) => (v is num) ? v.round() : int.tryParse('$v') ?? 0;
-    return _NutritionResult(
-      items: (j['items'] as List<dynamic>? ?? []).map((e) => '$e').toList(),
-      mealSize: j['mealSize']?.toString() ?? 'medium',
-      calories: _i(j['calories']),
-      protein: _i(j['protein']),
-      carbs: _i(j['carbs']),
-      fat: _i(j['fat']),
-      fiber: _i(j['fiber']),
-      sugars: _i(j['sugars']),
-      saturatedFat: _i(j['saturatedFat']),
-      sodium: _i(j['sodium']),
-      advice: j['advice']?.toString() ?? '',
     );
   }
 }
