@@ -1,4 +1,4 @@
-
+﻿
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -17,6 +17,7 @@ import 'activity_status_page.dart';
 import 'chat_page.dart';
 import 'events_page.dart';
 import 'food_nutrition_page.dart';
+import 'direct_chat_page.dart';
 import 'profile_view_page.dart';
 
 enum TrackActivityType { running, walking, cycling }
@@ -1141,6 +1142,43 @@ class _DashboardPageState extends State<DashboardPage>
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: <Widget>[
+        Row(
+          children: [
+            const Expanded(child: SizedBox()),
+            IconButton(
+              tooltip: 'Log Out',
+              onPressed: () async {
+                final bool? confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF1A2A44),
+                    title: const Text('Log Out', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                    content: const Text('Are you sure you want to log out?', style: TextStyle(color: Color(0xFFB2C1D7))),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+                        child: const Text('Log Out'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  try {
+                    await FirebaseAuth.instance.signOut();
+                  } catch (_) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Failed to log out. Please try again.')),
+                    );
+                  }
+                }
+              },
+              icon: const Icon(Icons.logout_rounded, color: Colors.redAccent, size: 26),
+            ),
+          ],
+        ),
         _sectionBanner('Profile', 'Your progress overview'),
         const SizedBox(height: 16),
         _SectionCard(
@@ -1965,79 +2003,195 @@ class _MapCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool hasRoute = routePoints.length >= 2;
+    final LatLng center = currentLatLng ??
+        (routePoints.isNotEmpty ? routePoints.last : const LatLng(20.5937, 78.9629));
+
     return _SectionCard(
       child: SizedBox(
-        height: 280,
+        height: 300,
         child: Stack(
-          children: <Widget>[
+          children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(24),
-              child: routePoints.length >= 2
-                  ? FlutterMap(
-                      mapController: mapController,
-                      options: MapOptions(
-                        initialCenter: currentLatLng ?? routePoints.last,
-                        initialZoom: 16,
-                      ),
-                      children: <Widget>[
-                        TileLayer(
-                          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'com.example.build_u',
+              child: FlutterMap(
+                mapController: mapController,
+                options: MapOptions(
+                  initialCenter: center,
+                  initialZoom: 17.5,
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
+                  ),
+                ),
+                children: [
+                  // Base map tiles
+                  TileLayer(
+                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.example.build_u',
+                  ),
+
+                  // Route polyline â€” orange like Swiggy delivery route
+                  if (hasRoute)
+                    PolylineLayer(
+                      polylines: [
+                        // Shadow/outline for visibility
+                        Polyline(
+                          points: routePoints,
+                          strokeWidth: 9,
+                          color: Colors.black.withOpacity(0.25),
+                          strokeCap: StrokeCap.round,
+                          strokeJoin: StrokeJoin.round,
                         ),
-                        PolylineLayer(
-                          polylines: <Polyline>[
-                            Polyline(
-                              points: routePoints,
-                              strokeWidth: 5,
-                              color: const Color(0xFFFF7A18),
-                            ),
-                          ],
+                        // Main route line
+                        Polyline(
+                          points: routePoints,
+                          strokeWidth: 6,
+                          color: const Color(0xFFFF6200),
+                          strokeCap: StrokeCap.round,
+                          strokeJoin: StrokeJoin.round,
                         ),
                       ],
-                    )
-                  : Container(
-                      color: const Color(0xFF111A2D),
-                      alignment: Alignment.center,
-                      child: const Text(
-                        'Waiting for GPS...',
-                        style: TextStyle(color: Color(0xFF8592A8), fontSize: 16),
-                      ),
                     ),
+
+                  // Markers layer
+                  MarkerLayer(
+                    markers: [
+                      // Start marker â€” green dot
+                      if (routePoints.isNotEmpty)
+                        Marker(
+                          point: routePoints.first,
+                          width: 28,
+                          height: 28,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2E7D32),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 3),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.3),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            child: const Icon(Icons.circle, color: Colors.white, size: 10),
+                          ),
+                        ),
+
+                      // Current / end position â€” orange pulsing dot
+                      if (currentLatLng != null)
+                        Marker(
+                          point: currentLatLng!,
+                          width: 32,
+                          height: 32,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              // Outer pulse ring
+                              Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFF6200).withOpacity(0.25),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              // Inner dot
+                              Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFF6200),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: 3),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFFFF6200).withOpacity(0.5),
+                                      blurRadius: 8,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
+
+            // GPS status bar at bottom
             Positioned(
               left: 12,
               right: 12,
               bottom: 12,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.25),
-                  borderRadius: BorderRadius.circular(18),
+                  color: Colors.black.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 child: Row(
-                  children: <Widget>[
+                  children: [
                     Icon(
                       gpsAcquired ? Icons.gps_fixed : Icons.gps_off_rounded,
-                      color: gpsAcquired
-                          ? const Color(0xFFFFB054)
-                          : const Color(0xFF9A8D73),
-                      size: 18,
+                      color: gpsAcquired ? const Color(0xFF4CAF50) : const Color(0xFF9A8D73),
+                      size: 16,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         gpsStatusText,
-                        style: const TextStyle(color: Colors.white70),
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                     ),
-                    Text(
-                      isTracking ? 'Tracking live' : 'Press Start to begin',
-                      style: const TextStyle(color: Colors.white54),
-                    ),
+                    if (hasRoute)
+                      Text(
+                        '${routePoints.length} pts',
+                        style: const TextStyle(color: Colors.white38, fontSize: 11),
+                      ),
+                    if (!hasRoute)
+                      Text(
+                        isTracking ? 'Acquiring route...' : 'Press Start',
+                        style: const TextStyle(color: Colors.white54, fontSize: 11),
+                      ),
                   ],
                 ),
               ),
             ),
+
+            // Legend â€” start/end
+            if (hasRoute)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(children: [
+                        Container(width: 10, height: 10, decoration: const BoxDecoration(color: Color(0xFF2E7D32), shape: BoxShape.circle)),
+                        const SizedBox(width: 6),
+                        const Text('Start', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                      ]),
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        Container(width: 10, height: 10, decoration: const BoxDecoration(color: Color(0xFFFF6200), shape: BoxShape.circle)),
+                        const SizedBox(width: 6),
+                        const Text('Current', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -2060,21 +2214,21 @@ class _ActivityChip extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 240),
-        padding: const EdgeInsets.symmetric(vertical: 18),
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF202A47) : const Color(0xFF16233A),
-          borderRadius: BorderRadius.circular(22),
+          color: selected ? const Color(0xFFFF7A18) : const Color(0xFF15233A),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: selected ? const Color(0xFFFF7A18) : const Color(0x1EFFFFFF),
+            color: selected ? const Color(0xFFFF7A18) : const Color(0x1CFFFFFF),
           ),
         ),
+        alignment: Alignment.center,
         child: Text(
           label,
-          textAlign: TextAlign.center,
           style: TextStyle(
-            color: selected ? const Color(0xFFFFA449) : const Color(0xFFA6B3C6),
-            fontWeight: FontWeight.w700,
+            color: selected ? Colors.white : const Color(0xFF8592A8),
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
           ),
         ),
       ),

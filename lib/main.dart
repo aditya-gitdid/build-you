@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'dashboard_page.dart';
 import 'doctor_home_page.dart';
@@ -9,6 +10,7 @@ import 'login_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
   await Firebase.initializeApp(
     options: const FirebaseOptions(
       apiKey: 'AIzaSyBabZ8z70-JzVsXtsQfqB7Bz0zG4wVVvzE',
@@ -18,6 +20,7 @@ Future<void> main() async {
     ),
   );
   runApp(const HealthTrackerApp());
+
 }
 
 class HealthTrackerApp extends StatelessWidget {

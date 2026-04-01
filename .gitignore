@@ -49,3 +49,5 @@ android/.gradle/
 android/build/
 ios/Pods/
 *.log
+#Environment variables
+.env

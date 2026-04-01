@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'activity_calendar_page.dart';
 import 'activity_session.dart';
+import 'direct_chat_page.dart';
 
 class DoctorHomePage extends StatefulWidget {
   const DoctorHomePage({super.key});
@@ -177,6 +178,24 @@ class _PatientsTab extends StatelessWidget {
                                         style: const TextStyle(
                                             color: Color(0xFF8FA0BA), fontSize: 13)),
                                 ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              tooltip: 'Chat with $name',
+                              onPressed: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => DirectChatPage(
+                                    otherUid: uid,
+                                    otherName: name,
+                                    isDoctor: true,
+                                  ),
+                                ),
+                              ),
+                              icon: const Icon(
+                                Icons.chat_bubble_outline,
+                                color: Color(0xFFFF6200),
                               ),
                             ),
                             const Icon(Icons.calendar_month_outlined,
