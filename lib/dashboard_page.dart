@@ -453,6 +453,8 @@ class _DashboardPageState extends State<DashboardPage>
           avgSpeedKmh: sessionSpeed,
           routePoints: List<LatLng>.from(_routePoints),
           activityType: sessionType.name,
+          steps: sessionSteps,
+          calories: sessionCalories,
         ),
       ),
     );
@@ -770,7 +772,12 @@ class _DashboardPageState extends State<DashboardPage>
                 icon: Icons.restaurant_menu_rounded,
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const FoodNutritionPage()),
+                  MaterialPageRoute(
+                    builder: (_) => ActivityCalendarPage(
+                      sessions: _activitySessions,
+                      initialTab: 1,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -802,7 +809,15 @@ class _DashboardPageState extends State<DashboardPage>
           ),
         ),
         const SizedBox(height: 18),
-        const _SectionHeader(title: 'Recent Activity', actionLabel: 'See All'),
+        GestureDetector(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ActivityCalendarPage(sessions: _activitySessions),
+            ),
+          ),
+          child: const _SectionHeader(title: 'Recent Activity', actionLabel: 'See All →'),
+        ),
         const SizedBox(height: 10),
         if (_activitySessions.isEmpty)
           const _EmptyCard(
@@ -810,7 +825,15 @@ class _DashboardPageState extends State<DashboardPage>
             subtitle: 'Your latest sessions will appear here once you start tracking.',
           )
         else
-          ..._activitySessions.take(3).map((ActivitySession s) => _ActivityTile(session: s)),
+          ..._activitySessions.take(3).map((ActivitySession s) => _ActivityTile(
+            session: s,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ActivityCalendarPage(sessions: _activitySessions),
+              ),
+            ),
+          )),
       ],
     );
   }
@@ -865,13 +888,14 @@ class _DashboardPageState extends State<DashboardPage>
         Row(
           children: TrackActivityType.values.map((TrackActivityType type) {
             final bool selected = _selectedActivity == type;
+            final bool disabled = _isTracking && !selected;
             return Expanded(
               child: Padding(
                 padding: EdgeInsets.only(right: type == TrackActivityType.cycling ? 0 : 10),
                 child: _ActivityChip(
                   label: _activityLabel(type),
                   selected: selected,
-                  onTap: () => setState(() => _selectedActivity = type),
+                  onTap: disabled ? null : () => setState(() => _selectedActivity = type),
                 ),
               ),
             );
@@ -1291,6 +1315,8 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ],
         ),
+        const SizedBox(height: 18),
+        const _ConnectDoctorSection(),
       ],
     );
   }
@@ -1916,68 +1942,72 @@ class _SummaryLine extends StatelessWidget {
 }
 
 class _ActivityTile extends StatelessWidget {
-  const _ActivityTile({required this.session});
+  const _ActivityTile({required this.session, this.onTap});
 
   final ActivitySession session;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: _SectionCard(
-        child: Row(
-          children: <Widget>[
-            Container(
-              width: 52,
-              height: 52,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: <Color>[Color(0xFFFF6A00), Color(0xFFFF9E43)],
+    return GestureDetector(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: _SectionCard(
+          child: Row(
+            children: <Widget>[
+              Container(
+                width: 52,
+                height: 52,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: <Color>[Color(0xFFFF6A00), Color(0xFFFF9E43)],
+                  ),
+                ),
+                child: const Icon(Icons.show_chart_rounded, color: Colors.white),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      session.activityType.toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Latest activity',
+                      style: TextStyle(color: Color(0xFF8490A5)),
+                    ),
+                  ],
                 ),
               ),
-              child: const Icon(Icons.show_chart_rounded, color: Colors.white),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: <Widget>[
                   Text(
-                    session.activityType.toUpperCase(),
+                    '${session.distanceKm.toStringAsFixed(2)} km',
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Latest activity',
-                    style: TextStyle(color: Color(0xFF8490A5)),
+                  Text(
+                    '${session.duration}  ${session.calories.toStringAsFixed(0)} cal',
+                    style: const TextStyle(color: Color(0xFF8A96AB)),
                   ),
                 ],
               ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: <Widget>[
-                Text(
-                  '${session.distanceKm.toStringAsFixed(2)} km',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${session.duration}  ${session.calories.toStringAsFixed(0)} cal',
-                  style: const TextStyle(color: Color(0xFF8A96AB)),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -2202,12 +2232,12 @@ class _ActivityChip extends StatelessWidget {
   const _ActivityChip({
     required this.label,
     required this.selected,
-    required this.onTap,
+    this.onTap,
   });
 
   final String label;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2794,6 +2824,160 @@ class _EmptyCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ConnectDoctorSection extends StatefulWidget {
+  const _ConnectDoctorSection();
+
+  @override
+  State<_ConnectDoctorSection> createState() => _ConnectDoctorSectionState();
+}
+
+class _ConnectDoctorSectionState extends State<_ConnectDoctorSection> {
+  final _uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+  String? _assignedDoctorId;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAssigned();
+  }
+
+  Future<void> _loadAssigned() async {
+    final doc = await FirebaseFirestore.instance.collection('users').doc(_uid).get();
+    if (!mounted) return;
+    setState(() {
+      _assignedDoctorId = doc.data()?['assignedDoctorId'] as String?;
+      _loading = false;
+    });
+  }
+
+  Future<void> _connect(String doctorId) async {
+    await FirebaseFirestore.instance.collection('users').doc(_uid).update({
+      'assignedDoctorId': doctorId,
+    });
+    if (!mounted) return;
+    setState(() => _assignedDoctorId = doctorId);
+  }
+
+  Future<void> _disconnect() async {
+    await FirebaseFirestore.instance.collection('users').doc(_uid).update({
+      'assignedDoctorId': FieldValue.delete(),
+    });
+    if (!mounted) return;
+    setState(() => _assignedDoctorId = null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SectionCard(
+      title: 'Connect to a Doctor',
+      child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance.collection('doctors').snapshots(),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final docs = snap.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return const Text(
+                    'No doctors available yet.',
+                    style: TextStyle(color: Color(0xFF8A96AB)),
+                  );
+                }
+                return Column(
+                  children: docs.map((doc) {
+                    final data = doc.data();
+                    final name = (data['name'] as String? ?? '').trim();
+                    final qualification = data['qualification'] as String? ?? '';
+                    final isConnected = _assignedDoctorId == doc.id;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A2841),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: isConnected
+                              ? const Color(0xFFFF7A18)
+                              : const Color(0x1CFFFFFF),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                colors: [Color(0xFFFF6A00), Color(0xFFFFA449)],
+                              ),
+                            ),
+                            child: const Icon(Icons.medical_services_rounded,
+                                color: Colors.white, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Dr. $name',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                if (qualification.isNotEmpty)
+                                  Text(
+                                    qualification,
+                                    style: const TextStyle(
+                                        color: Color(0xFF8A96AB), fontSize: 12),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (isConnected) ...<Widget>[
+                            IconButton(
+                              tooltip: 'Chat with Dr. $name',
+                              onPressed: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => DirectChatPage(
+                                    otherUid: doc.id,
+                                    otherName: name,
+                                    isDoctor: false,
+                                  ),
+                                ),
+                              ),
+                              icon: const Icon(Icons.chat_bubble_outline_rounded,
+                                  color: Color(0xFFFF8A1F)),
+                            ),
+                            TextButton(
+                              onPressed: _disconnect,
+                              child: const Text('Disconnect',
+                                  style: TextStyle(color: Colors.redAccent)),
+                            ),
+                          ] else
+                            TextButton(
+                              onPressed: () => _connect(doc.id),
+                              child: const Text('Connect',
+                                  style: TextStyle(color: Color(0xFFFF8A1F))),
+                            ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
     );
   }
 }

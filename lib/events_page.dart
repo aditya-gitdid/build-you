@@ -1,6 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'event_chat_page.dart';
 
@@ -23,6 +27,7 @@ class _EventsPageState extends State<EventsPage> {
   DateTime? _eventDate;
   TimeOfDay? _eventTime;
   String _eventType = 'Running';
+  String? _imageBase64;
 
   @override
   void initState() {
@@ -66,6 +71,7 @@ class _EventsPageState extends State<EventsPage> {
       'pendingRequests': [],
       'createdAt': FieldValue.serverTimestamp(),
       'isPast': false,
+      if (_imageBase64 != null) 'imageBase64': _imageBase64,
     });
 
     // Creator is automatically in the chat
@@ -83,6 +89,7 @@ class _EventsPageState extends State<EventsPage> {
       _eventDate = null;
       _eventTime = null;
       _eventType = 'Running';
+      _imageBase64 = null;
     });
     if (mounted) Navigator.pop(context);
   }
@@ -240,6 +247,41 @@ class _EventsPageState extends State<EventsPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                // Image picker
+                StatefulBuilder(builder: (_, setImg) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_imageBase64 != null)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Image.memory(
+                            base64Decode(_imageBase64!),
+                            height: 160,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      const SizedBox(height: 6),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked = await ImagePicker().pickImage(
+                            source: ImageSource.gallery,
+                            maxWidth: 800,
+                            imageQuality: 70,
+                          );
+                          if (picked == null) return;
+                          final bytes = await File(picked.path).readAsBytes();
+                          setState(() => _imageBase64 = base64Encode(bytes));
+                          setImg(() {});
+                        },
+                        icon: const Icon(Icons.image_outlined, size: 16),
+                        label: Text(_imageBase64 == null ? 'Add Image (optional)' : 'Change Image'),
+                        style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
+                      ),
+                    ],
+                  );
+                }),
                 const SizedBox(height: 12),
                 ElevatedButton(
                   onPressed: _createEvent,
@@ -471,6 +513,7 @@ class _EventFirestoreCard extends StatelessWidget {
     final members = List<String>.from(data['members'] ?? []);
     final pendingRequests = List<Map<String, dynamic>>.from(
         (data['pendingRequests'] as List? ?? []).map((e) => Map<String, dynamic>.from(e)));
+    final imageBase64 = data['imageBase64'] as String?;
 
     final isMember = members.contains(myUid);
     final isCreator = creatorUid == myUid;
@@ -494,13 +537,25 @@ class _EventFirestoreCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Event image (visible to all)
+          if (imageBase64 != null)
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+              child: Image.memory(
+                base64Decode(imageBase64),
+                width: double.infinity,
+                height: 180,
+                fit: BoxFit.cover,
+              ),
+            ),
           // Header banner
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: accent,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(14)),
+              borderRadius: imageBase64 == null
+                  ? const BorderRadius.vertical(top: Radius.circular(14))
+                  : BorderRadius.zero,
             ),
             child: Row(
               children: [

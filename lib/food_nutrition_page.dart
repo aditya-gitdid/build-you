@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -10,6 +12,8 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+import 'food_log_page.dart';
 
 // ── API Service ───────────────────────────────────────────────────────────────
 
@@ -368,6 +372,8 @@ class _FoodNutritionPageState extends State<FoodNutritionPage> {
           'englishText': eng,
           'isUser': false,
           'selectedLanguage': _lang,
+          'isImageAnalysis': true,
+          'rawAnalysis': eng,
         });
         _isLoading = false;
       });
@@ -427,6 +433,52 @@ class _FoodNutritionPageState extends State<FoodNutritionPage> {
         _messages[index]['text'] = translated;
         _messages[index]['selectedLanguage'] = newLang;
       });
+    }
+  }
+
+  Future<void> _saveToLog(Map<String, dynamic> message) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final analysis = message['rawAnalysis'] as String? ?? message['englishText'] as String? ?? '';
+    // Extract food name from first line of analysis
+    final lines = analysis.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    String foodName = 'Food';
+    for (final line in lines) {
+      if (!line.startsWith('#') && line.trim().isNotEmpty) {
+        foodName = line.trim().replaceAll('*', '').replaceAll('#', '').trim();
+        if (foodName.length > 40) foodName = foodName.substring(0, 40);
+        break;
+      }
+      if (line.contains('## Food Name')) {
+        final idx = lines.indexOf(line);
+        if (idx + 1 < lines.length) {
+          foodName = lines[idx + 1].trim().replaceAll('*', '');
+        }
+        break;
+      }
+    }
+    try {
+      await FoodLogService.saveEntry(
+        uid: uid,
+        foodName: foodName,
+        analysisText: analysis,
+        date: DateTime.now(),
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Saved to Food Log!',
+                style: TextStyle(color: Colors.white)),
+            backgroundColor: Color(0xFF1B5E20),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save: $e')),
+        );
+      }
     }
   }
 
@@ -515,6 +567,9 @@ class _FoodNutritionPageState extends State<FoodNutritionPage> {
                 message: _messages[i],
                 langs: _langs,
                 onLangChanged: (l) => _translateMsg(i, l),
+                onSaveToLog: _messages[i]['isImageAnalysis'] == true
+                    ? () => _saveToLog(_messages[i])
+                    : null,
               ),
             ),
           ),
@@ -605,11 +660,13 @@ class _Bubble extends StatelessWidget {
     required this.message,
     required this.langs,
     required this.onLangChanged,
+    this.onSaveToLog,
   });
 
   final Map<String, dynamic> message;
   final List<String> langs;
   final void Function(String) onLangChanged;
+  final VoidCallback? onSaveToLog;
 
   @override
   Widget build(BuildContext context) {
@@ -712,6 +769,33 @@ class _Bubble extends StatelessWidget {
                             color: Colors.white, fontSize: 15),
                       ),
                     ),
+                  // Save to Food Log button
+                  if (!isUser &&
+                      message['isImageAnalysis'] == true &&
+                      onSaveToLog != null) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: onSaveToLog,
+                        icon: const Icon(Icons.save_alt_rounded,
+                            size: 16),
+                        label: const Text('Save to Food Log'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor:
+                              const Color(0xFF1B5E20),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 10),
+                          shape: RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.circular(10)),
+                          textStyle:
+                              const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

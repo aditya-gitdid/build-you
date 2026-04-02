@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'activity_calendar_page.dart';
 import 'activity_session.dart';
 import 'direct_chat_page.dart';
+import 'events_page.dart';
+import 'food_log_page.dart';
 
 class DoctorHomePage extends StatefulWidget {
   const DoctorHomePage({super.key});
@@ -42,7 +44,7 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
         children: [
           _PatientsTab(doctorName: _doctorName),
           _DoctorSocialTab(),
-          _DoctorEventsTab(),
+          const EventsPage(),
           _DoctorProfileTab(doctorName: _doctorName),
         ],
       ),
@@ -182,6 +184,34 @@ class _PatientsTab extends StatelessWidget {
                             ),
                             const SizedBox(width: 8),
                             IconButton(
+                              tooltip: 'Food History',
+                              onPressed: () {
+                                final doctorUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+                                FirebaseFirestore.instance
+                                    .collection('doctors')
+                                    .doc(doctorUid)
+                                    .get()
+                                    .then((doc) {
+                                  final dName = (doc.data()?['name'] as String? ?? 'Doctor').trim();
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => PatientFoodHistoryPage(
+                                        patientUid: uid,
+                                        patientName: name,
+                                        doctorName: dName,
+                                      ),
+                                    ),
+                                  );
+                                });
+                              },
+                              icon: const Icon(
+                                Icons.restaurant_menu,
+                                color: Color(0xFF66BB6A),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
                               tooltip: 'Chat with $name',
                               onPressed: () => Navigator.push(
                                 context,
@@ -228,7 +258,11 @@ class _PatientsTab extends StatelessWidget {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ActivityCalendarPage(sessions: sessions, userName: name),
+        builder: (_) => ActivityCalendarPage(
+          sessions: sessions,
+          userName: name,
+          patientUid: uid,
+        ),
       ),
     );
   }
@@ -279,296 +313,6 @@ class _DoctorSocialTab extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ── EVENTS TAB ────────────────────────────────────────────────────────────────
-
-class _DoctorEventsTab extends StatefulWidget {
-  @override
-  State<_DoctorEventsTab> createState() => _DoctorEventsTabState();
-}
-
-class _DoctorEventsTabState extends State<_DoctorEventsTab> {
-  final List<_DoctorEvent> _events = [];
-  final _titleController = TextEditingController();
-  final _descController = TextEditingController();
-  final _locationController = TextEditingController();
-  DateTime? _eventDate;
-  TimeOfDay? _eventTime;
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _descController.dispose();
-    _locationController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime.now(),
-      lastDate: DateTime(2030),
-    );
-    if (picked != null) setState(() => _eventDate = picked);
-  }
-
-  Future<void> _pickTime() async {
-    final picked = await showTimePicker(
-        context: context, initialTime: TimeOfDay.now());
-    if (picked != null) setState(() => _eventTime = picked);
-  }
-
-  void _openCreateDialog() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF111F37),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModal) => Padding(
-          padding: EdgeInsets.fromLTRB(
-              16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 16),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Create Event',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 12),
-                _modalField(_titleController, 'Event title'),
-                const SizedBox(height: 10),
-                _modalField(_descController, 'Description'),
-                const SizedBox(height: 10),
-                _modalField(_locationController, 'Location'),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          await _pickDate();
-                          setModal(() {});
-                        },
-                        icon: const Icon(Icons.calendar_month),
-                        label: Text(_eventDate == null
-                            ? 'Select Date'
-                            : '${_eventDate!.day}/${_eventDate!.month}/${_eventDate!.year}'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () async {
-                          await _pickTime();
-                          setModal(() {});
-                        },
-                        icon: const Icon(Icons.access_time),
-                        label: Text(_eventTime == null
-                            ? 'Select Time'
-                            : _eventTime!.format(context)),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF6200)),
-                  onPressed: () {
-                    if (_titleController.text.trim().isEmpty ||
-                        _eventDate == null ||
-                        _eventTime == null) return;
-                    setState(() {
-                      _events.insert(
-                        0,
-                        _DoctorEvent(
-                          title: _titleController.text.trim(),
-                          description: _descController.text.trim(),
-                          location: _locationController.text.trim().isEmpty
-                              ? 'TBD'
-                              : _locationController.text.trim(),
-                          dateLabel:
-                              '${_eventDate!.day}/${_eventDate!.month}/${_eventDate!.year}',
-                          timeLabel: _eventTime!.format(context),
-                        ),
-                      );
-                      _titleController.clear();
-                      _descController.clear();
-                      _locationController.clear();
-                      _eventDate = null;
-                      _eventTime = null;
-                    });
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Create Event',
-                      style: TextStyle(color: Colors.white)),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _modalField(TextEditingController c, String hint) => TextField(
-        controller: c,
-        style: const TextStyle(color: Colors.white),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: const TextStyle(color: Color(0xFF8FA0BA)),
-          filled: true,
-          fillColor: const Color(0xFF1A2A44),
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide.none),
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.topRight,
-                colors: [Color(0xFFFF5B00), Color(0xFF130E19)],
-              ),
-            ),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Events',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 34,
-                              fontWeight: FontWeight.w700)),
-                      SizedBox(height: 4),
-                      Text('Manage your health events',
-                          style:
-                              TextStyle(color: Color(0xFFFFCCA6), fontSize: 15)),
-                    ],
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: _openCreateDialog,
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('Create'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1A1E2A),
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _events.isEmpty
-                ? const Center(
-                    child: Text('No events yet. Create one!',
-                        style:
-                            TextStyle(color: Color(0xFFAAB3C3), fontSize: 16)),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.all(14),
-                    itemCount: _events.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, i) => _EventCard(event: _events[i]),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DoctorEvent {
-  const _DoctorEvent({
-    required this.title,
-    required this.description,
-    required this.location,
-    required this.dateLabel,
-    required this.timeLabel,
-  });
-  final String title;
-  final String description;
-  final String location;
-  final String dateLabel;
-  final String timeLabel;
-}
-
-class _EventCard extends StatelessWidget {
-  const _EventCard({required this.event});
-  final _DoctorEvent event;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A2A44),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFFF6200).withOpacity(0.4)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(event.title,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700)),
-          if (event.description.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(event.description,
-                style: const TextStyle(color: Color(0xFFB2C1D7), fontSize: 14)),
-          ],
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(Icons.calendar_today,
-                  color: Color(0xFF8FA0BA), size: 14),
-              const SizedBox(width: 4),
-              Text(event.dateLabel,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(width: 12),
-              const Icon(Icons.access_time,
-                  color: Color(0xFF8FA0BA), size: 14),
-              const SizedBox(width: 4),
-              Text(event.timeLabel,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13)),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              const Icon(Icons.location_on_outlined,
-                  color: Color(0xFF8FA0BA), size: 14),
-              const SizedBox(width: 4),
-              Text(event.location,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13)),
-            ],
-          ),
-        ],
       ),
     );
   }
