@@ -257,7 +257,9 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   double _computeCalories(Duration elapsed) {
-    return _activityMet() * 70 * (elapsed.inSeconds / 3600);
+    final timeBased = _activityMet() * 70 * (elapsed.inSeconds / 3600);
+    final stepBased = _steps * 0.04;
+    return timeBased + stepBased;
   }
 
   Future<bool> _ensureLocationReady() async {
@@ -381,6 +383,7 @@ class _DashboardPageState extends State<DashboardPage>
         if (mounted) {
           setState(() {
             _steps++;
+            _calories = _computeCalories(_elapsed);
           });
         }
       }
